@@ -1,6 +1,6 @@
 # Telegram to Discord Bridge 💬➡️🤖
 
-This is a Python script developed as a personal project to automatically forward new posts from a Telegram channel directly to a specified Discord channel in real time.
+This is a Python script developed as a personal project to automatically forward new posts from a Telegram channel directly to a specified Discord channel in real time. To check when new episodes of project RED are released
 
 ## Description 📜
 
