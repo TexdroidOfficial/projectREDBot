@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,11 +11,37 @@ from telethon import TelegramClient, events
 from telethon.tl.types import MessageService
 
 
+MAX_DISCORD_SNOWFLAKE = 9223372036854775807
+
+
 def require_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
+
+
+def parse_discord_channel_id(raw_value: str) -> int:
+    candidate = raw_value.strip()
+
+    if "/channels/" in candidate:
+        parts = [p for p in candidate.split("/") if p]
+        candidate = parts[-1]
+
+    if not candidate.isdigit():
+        raise RuntimeError(
+            "DISCORD_CHANNEL_ID must be a numeric channel ID (or a full Discord channel URL). "
+            f"Got: {raw_value!r}"
+        )
+
+    channel_id = int(candidate)
+    if channel_id <= 0 or channel_id > MAX_DISCORD_SNOWFLAKE:
+        raise RuntimeError(
+            "DISCORD_CHANNEL_ID is out of range for Discord snowflakes. "
+            f"Got: {channel_id}"
+        )
+
+    return channel_id
 
 
 def load_state(path: Path) -> dict[str, Any]:
@@ -33,6 +60,9 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
 
 def build_discord_message(channel_name: str, message_id: int, text: str, link: str | None) -> str:
     clean_text = text.strip() if text else "[Media post or empty text]"
+    clean_text = clean_text.replace("\x00", "")
+    clean_text = clean_text.encode("utf-8", errors="ignore").decode("utf-8")
+    clean_text = re.sub(r"\n{3,}", "\n\n", clean_text)
     if len(clean_text) > 1500:
         clean_text = clean_text[:1497] + "..."
 
@@ -49,6 +79,43 @@ def build_discord_message(channel_name: str, message_id: int, text: str, link: s
     if len(message) > 1990:
         message = message[:1987] + "..."
     return message
+
+
+def split_for_discord(payload: str, limit: int = 1900) -> list[str]:
+    if len(payload) <= limit:
+        return [payload]
+
+    chunks: list[str] = []
+    text = payload
+    while text:
+        if len(text) <= limit:
+            chunks.append(text)
+            break
+
+        split_at = text.rfind("\n", 0, limit)
+        if split_at < 200:
+            split_at = limit
+
+        part = text[:split_at].rstrip()
+        chunks.append(part)
+        text = text[split_at:].lstrip()
+
+    return chunks
+
+
+async def send_to_discord(channel: Any, payload: str) -> None:
+    chunks = split_for_discord(payload)
+    for chunk in chunks:
+        if not chunk.strip():
+            continue
+
+        try:
+            await channel.send(chunk)
+        except discord.errors.HTTPException as exc:
+            logging.error("Discord send failed: status=%s code=%s text=%s", exc.status, exc.code, exc.text)
+            fallback = "Telegram update received, but content could not be posted in full."
+            await channel.send(fallback)
+            break
 
 
 class BridgeDiscordClient(discord.Client):
@@ -73,7 +140,7 @@ async def main() -> None:
     tg_channel_ref = require_env("TG_CHANNEL")
 
     discord_token = require_env("DISCORD_BOT_TOKEN")
-    discord_channel_id = int(require_env("DISCORD_CHANNEL_ID"))
+    discord_channel_id = parse_discord_channel_id(require_env("DISCORD_CHANNEL_ID"))
 
     tg_session = os.getenv("TG_SESSION", "tg_bridge_session")
     state_file = Path(os.getenv("STATE_FILE", "bridge_state.json"))
@@ -86,7 +153,14 @@ async def main() -> None:
         await asyncio.wait_for(discord_client.ready_event.wait(), timeout=60)
         discord_channel = discord_client.get_channel(discord_channel_id)
         if discord_channel is None:
-            discord_channel = await discord_client.fetch_channel(discord_channel_id)
+            try:
+                discord_channel = await discord_client.fetch_channel(discord_channel_id)
+            except discord.errors.HTTPException as exc:
+                raise RuntimeError(
+                    "Failed to fetch Discord channel. Check DISCORD_CHANNEL_ID. "
+                    "Tip: enable Developer Mode in Discord, right-click the target channel, and use Copy Channel ID. "
+                    f"Current value resolves to: {discord_channel_id}"
+                ) from exc
 
         if not hasattr(discord_channel, "send"):
             raise RuntimeError("Configured DISCORD_CHANNEL_ID is not a sendable channel")
@@ -124,7 +198,7 @@ async def main() -> None:
                 link=public_link,
             )
 
-            await discord_channel.send(payload)
+            await send_to_discord(discord_channel, payload)
 
             last_seen_id = msg.id
             state[channel_id_key] = last_seen_id
