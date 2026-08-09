@@ -9,9 +9,12 @@ from typing import Any
 import discord
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageService
+from telethon.sessions import StringSession
 
 
 MAX_DISCORD_SNOWFLAKE = 9223372036854775807
+
+    
 
 
 def require_env(name: str) -> str:
@@ -138,6 +141,13 @@ async def main() -> None:
     tg_api_id = int(require_env("TG_API_ID"))
     tg_api_hash = require_env("TG_API_HASH")
     tg_channel_ref = require_env("TG_CHANNEL")
+    
+    session_string = os.getenv("TG_SESSION_STRING")
+    if session_string:
+        tg_client = TelegramClient(StringSession(session_string), tg_api_id, tg_api_hash)
+    else:
+        tg_session = os.getenv("TG_SESSION", "tg_bridge_session")
+        tg_client = TelegramClient(tg_session, tg_api_id, tg_api_hash)
 
     discord_token = require_env("DISCORD_BOT_TOKEN")
     discord_channel_id = parse_discord_channel_id(require_env("DISCORD_CHANNEL_ID"))
