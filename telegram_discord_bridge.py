@@ -142,7 +142,7 @@ async def main() -> None:
     tg_api_hash = require_env("TG_API_HASH")
     tg_channel_ref = require_env("TG_CHANNEL")
     
-    session_string = os.getenv("TG_SESSION_STRING")
+    session_string = os.getenv("TG_SESSION_STRING", "").strip()
     if session_string:
         tg_client = TelegramClient(StringSession(session_string), tg_api_id, tg_api_hash)
     else:
@@ -175,7 +175,6 @@ async def main() -> None:
         if not hasattr(discord_channel, "send"):
             raise RuntimeError("Configured DISCORD_CHANNEL_ID is not a sendable channel")
 
-        tg_client = TelegramClient(tg_session, tg_api_id, tg_api_hash)
         await tg_client.start()
 
         entity = await tg_client.get_entity(tg_channel_ref)
